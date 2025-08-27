@@ -1,7 +1,18 @@
 import React, { useState, useEffect } from "react";
-import { Button, Typography, Box, Alert } from "@mui/material";
 import { useNavigate, useLocation } from "react-router-dom";
+import { motion } from "framer-motion";
+import { Mail, LogIn, LogOut, ArrowRight } from "lucide-react";
 import api from "../services/api";
+import { Button } from "./ui/button";
+import { Alert } from "./ui/alert";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "./ui/card";
+import { Spinner } from "./ui/spinner";
 
 const Login = () => {
   const [error, setError] = useState(null);
@@ -61,45 +72,67 @@ const Login = () => {
     navigate("/classifications");
   };
 
+  const MotionDiv = motion.div;
+
   return (
-    <Box textAlign="center" mt={5}>
-      <Typography variant="h4" gutterBottom>
-        Email Classifier App
-      </Typography>
-      {error && <Alert severity="error">{error}</Alert>}
-      {isConnected && (
-        <Alert severity="success" sx={{ mb: 2 }}>
-          Gmail Connected
-        </Alert>
-      )}
-      {!isConnected ? (
-        <Button
-          variant="contained"
-          color="primary"
-          onClick={handleLogin}
-          disabled={loading}
-          sx={{ mr: 2 }}
-        >
-          {loading ? "Connecting..." : "Connect to Gmail"}
-        </Button>
-      ) : (
-        <Button
-          variant="contained"
-          color="secondary"
-          onClick={handleLogout}
-          sx={{ mr: 2 }}
-        >
-          Disconnect Gmail
-        </Button>
-      )}
-      <Button
-        variant="outlined"
-        color="secondary"
-        onClick={handleViewClassifications}
+    <div className="flex items-center justify-center py-16">
+      <MotionDiv
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3 }}
+        className="w-full max-w-xl"
       >
-        View Classifications
-      </Button>
-    </Box>
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-2xl">
+              <Mail className="text-[hsl(var(--primary))]" size={22} />
+              JASH – Email Classification
+            </CardTitle>
+            <CardDescription>
+              Connect your Gmail and view live spam/ham classifications.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {error && <Alert variant="error">{error}</Alert>}
+            {isConnected && <Alert variant="success">Gmail Connected</Alert>}
+            <div className="flex flex-wrap items-center gap-3">
+              {!isConnected ? (
+                <Button
+                  onClick={handleLogin}
+                  disabled={loading}
+                  className="inline-flex items-center gap-2"
+                >
+                  {loading ? (
+                    <>
+                      <Spinner size={16} /> Connecting...
+                    </>
+                  ) : (
+                    <>
+                      <LogIn size={16} /> Connect to Gmail
+                    </>
+                  )}
+                </Button>
+              ) : (
+                <Button
+                  variant="secondary"
+                  onClick={handleLogout}
+                  className="inline-flex items-center gap-2"
+                >
+                  <LogOut size={16} /> Disconnect Gmail
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                onClick={handleViewClassifications}
+                className="inline-flex items-center gap-2"
+              >
+                View Classifications <ArrowRight size={16} />
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </MotionDiv>
+    </div>
   );
 };
 

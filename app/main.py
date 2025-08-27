@@ -15,14 +15,17 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import base64
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql import func
 from .model_loader import ModelLoader
 from .classify import EmailClassifier
 from .email_parser import EmailParser
 from datetime import datetime
+from pydantic import BaseModel
+import requests
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request as GoogleRequest  # ✅ alias
 
 # Load environment variables
 load_dotenv()
@@ -30,9 +33,9 @@ load_dotenv()
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler('app.log'),
+        logging.FileHandler("app.log"),
         logging.StreamHandler()
     ]
 )
@@ -52,7 +55,7 @@ app.add_middleware(
         "http://localhost:5173",
         "https://your-frontend-domain.com",
         "http://localhost:8000",
-        "https://localhost:8000"
+        "https://localhost:8000",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -67,7 +70,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # Initialize database
 Base = declarative_base()
 class Classification(Base):
-    __tablename__ = 'classifications'
+    __tablename__ = "classifications"
     id = Column(Integer, primary_key=True)
     message_id = Column(String, unique=True, index=True)
     sender = Column(String)
@@ -76,7 +79,7 @@ class Classification(Base):
     confidence = Column(Float)
     timestamp = Column(DateTime)
 
-DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///classifications.db')
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///classifications.db")
 engine = create_engine(DATABASE_URL)
 Base.metadata.create_all(engine, checkfirst=True)
 Session = sessionmaker(bind=engine)
@@ -88,6 +91,7 @@ email_parser = None
 stored_credentials = None
 flow = None
 
+# ✅ replace deprecated startup with lifespan
 @app.on_event("startup")
 async def startup_event():
     global model_loader, email_classifier, email_parser, flow
@@ -98,13 +102,13 @@ async def startup_event():
         model, tokenizer, label_encoder, max_length = model_loader.load_components()
         email_classifier = EmailClassifier(model, tokenizer, label_encoder, max_length)
         email_parser = EmailParser()
-        
+
         flow = Flow.from_client_secrets_file(
-            os.getenv('GOOGLE_CLIENT_SECRETS', 'client_secrets.json'),
-            scopes=['https://www.googleapis.com/auth/gmail.readonly'],
-            redirect_uri=os.getenv('GOOGLE_REDIRECT_URI', 'https://localhost:8000/api/auth/callback')
+            os.getenv("GOOGLE_CLIENT_SECRETS", "client_secrets.json"),
+            scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+            redirect_uri=os.getenv("GOOGLE_REDIRECT_URI", "https://localhost:8000/api/auth/callback"),
         )
-        
+
         logger.info("Model components and OAuth flow loaded successfully!")
     except Exception as e:
         logger.error(f"Failed to initialize: {str(e)}", exc_info=True)
@@ -114,20 +118,52 @@ async def startup_event():
 async def root():
     return {"message": "Email Classification API is running", "status": "healthy"}
 
+
+@app.get("/api/auth/profile")
+async def auth_profile():
+    global stored_credentials
+    try:
+        if not stored_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+
+        creds = Credentials.from_authorized_user_info(json.loads(stored_credentials))
+
+        # ✅ safe refresh
+        if not creds.valid and creds.expired and creds.refresh_token:
+            creds.refresh(GoogleRequest())
+            stored_credentials = creds.to_json()
+
+        resp = requests.get(
+            "https://www.googleapis.com/oauth2/v1/userinfo",
+            params={"alt": "json"},
+            headers={"Authorization": f"Bearer {creds.token}"},
+        )
+
+        if resp.status_code != 200:
+            raise HTTPException(status_code=resp.status_code, detail=resp.text)
+
+        return resp.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching profile: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/health")
 async def health_check():
     try:
         if not all([model_loader, email_classifier, email_parser]):
             return JSONResponse(
                 status_code=503,
-                content={"status": "unhealthy", "message": "Components not loaded"}
+                content={"status": "unhealthy", "message": "Components not loaded"},
             )
         return {"status": "healthy", "model_loaded": True}
     except Exception as e:
         logger.error(f"Health check error: {str(e)}", exc_info=True)
         return JSONResponse(
             status_code=503,
-            content={"status": "unhealthy", "error": str(e)}
+            content={"status": "unhealthy", "error": str(e)},
         )
 
 @app.post("/api/webhook/mailgun")
@@ -142,25 +178,24 @@ async def mailgun_webhook(request: Request, background_tasks: BackgroundTasks):
             payload = await request.json()
         else:
             raise HTTPException(status_code=400, detail="Unsupported content type")
-        
+
         logger.info("Received Mailgun webhook")
         email_data = email_parser.parse_mailgun_payload(payload)
         if not email_data:
             raise HTTPException(status_code=400, detail="Could not extract email content")
-        
+
         classification_result = email_classifier.classify_email(email_data["text"])
         response = {
             "status": "success",
             "email_info": {
                 "sender": email_data.get("sender", "Unknown"),
                 "subject": email_data.get("subject", "No Subject"),
-                "timestamp": email_data.get("timestamp")
+                "timestamp": email_data.get("timestamp"),
             },
-            "classification": classification_result
+            "classification": classification_result,
         }
-        
+
         background_tasks.add_task(log_classification, email_data, classification_result)
-        logger.info(f"Email classified: {classification_result['predicted_label']}")
         return JSONResponse(content=response)
     except HTTPException:
         raise
@@ -168,14 +203,20 @@ async def mailgun_webhook(request: Request, background_tasks: BackgroundTasks):
         logger.error(f"Error processing webhook: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+from pydantic import BaseModel
+
+class ClassifyRequest(BaseModel):
+    text: str
+
+
 @app.post("/api/classify")
 @limiter.limit("5/minute")
-async def classify_text(request: Dict[str, Any]):
+async def classify_text(request: Request, payload: ClassifyRequest):
     try:
-        text = request.get("text", "").strip()
+        text = payload.text.strip()
         if not text:
             raise HTTPException(status_code=400, detail="Text field is required")
-        
+
         result = email_classifier.classify_email(text)
         return JSONResponse(content={"status": "success", "classification": result})
     except HTTPException:
@@ -183,6 +224,7 @@ async def classify_text(request: Dict[str, Any]):
     except Exception as e:
         logger.error(f"Error in text classification: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/api/auth/login")
 async def auth_login():
@@ -194,28 +236,39 @@ async def auth_login():
         logger.error(f"Error initiating OAuth: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+from google.oauth2.credentials import Credentials
+
 @app.get("/api/auth/callback")
 async def auth_callback(request: Request, background_tasks: BackgroundTasks):
     try:
         flow.fetch_token(authorization_response=str(request.url))
+
         global stored_credentials
-        stored_credentials = flow.credentials.to_json()
+        creds = flow.credentials
+        stored_credentials = creds.to_json()   # ✅ proper credentials JSON
+
         logger.info("OAuth callback successful, credentials stored")
         background_tasks.add_task(fetch_and_classify_emails)
-        # Redirect to frontend with success status
+
+        # Redirect to frontend with success
         frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:5173')
         return RedirectResponse(url=f"{frontend_url}?auth=success")
     except Exception as e:
         logger.error(f"Error in OAuth callback: {str(e)}", exc_info=True)
-        # Redirect to frontend with error status
         frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:5173')
         return RedirectResponse(url=f"{frontend_url}?auth=error&message={str(e)}")
+
         
 @app.get("/api/results")
-async def get_results():
+async def get_results(limit: int = 50):
     try:
         session = Session()
-        classifications = session.query(Classification).order_by(Classification.timestamp.desc()).all()
+        classifications = (
+            session.query(Classification)
+            .order_by(Classification.timestamp.desc())
+            .limit(limit)
+            .all()
+        )
         results = [
             {
                 "message_id": c.message_id,
@@ -223,14 +276,72 @@ async def get_results():
                 "subject": c.subject,
                 "label": c.label,
                 "confidence": c.confidence,
-                "timestamp": c.timestamp.isoformat()
-            } for c in classifications
+                "timestamp": c.timestamp.isoformat(),
+            }
+            for c in classifications
         ]
         session.close()
-        logger.info(f"Retrieved {len(results)} classifications")
         return {"status": "success", "classifications": results}
     except Exception as e:
         logger.error(f"Error retrieving results: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+class FullEmailsQuery(BaseModel):
+    limit: int = 20
+
+@app.post("/api/emails/full")
+async def get_full_emails(query: FullEmailsQuery):
+    try:
+        if not stored_credentials:
+            raise HTTPException(status_code=401, detail="Not authorized with Gmail")
+
+        credentials = flow.credentials.from_authorized_user_info(json.loads(stored_credentials))
+        service = build('gmail', 'v1', credentials=credentials)
+
+        results = service.users().messages().list(userId='me', maxResults=min(max(query.limit, 1), 50), q='').execute()
+        messages = results.get('messages', [])
+        emails = []
+        for msg in messages:
+            msg_data = service.users().messages().get(userId='me', id=msg['id'], format='full').execute()
+            headers = msg_data['payload']['headers']
+            subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject')
+            sender = next((h['value'] for h in headers if h['name'] == 'From'), 'unknown@unknown.com')
+            date_header = next((h['value'] for h in headers if h['name'] == 'Date'), None)
+            timestamp = None
+            try:
+                timestamp = datetime.strptime(date_header, '%a, %d %b %Y %H:%M:%S %z').isoformat() if date_header else datetime.now().isoformat()
+            except Exception:
+                timestamp = datetime.now().isoformat()
+
+            body = ''
+            if 'data' in msg_data['payload'].get('body', {}):
+                body = base64.urlsafe_b64decode(msg_data['payload']['body']['data']).decode('utf-8', errors='ignore')
+            elif msg_data['payload'].get('parts'):
+                for part in msg_data['payload']['parts']:
+                    if part.get('mimeType') == 'text/plain' and part.get('body', {}).get('data'):
+                        body = base64.urlsafe_b64decode(part['body']['data']).decode('utf-8', errors='ignore')
+                        break
+                    elif part.get('mimeType') == 'text/html' and part.get('body', {}).get('data'):
+                        html_body = base64.urlsafe_b64decode(part['body']['data']).decode('utf-8', errors='ignore')
+                        body = email_parser._html_to_text(html_body)
+                        break
+
+            classification = email_classifier.classify_email(body or (msg_data.get('snippet') or '')) if email_classifier else {"predicted_label": "unknown", "confidence": 0.0}
+            emails.append({
+                "message_id": msg['id'],
+                "sender": sender,
+                "subject": subject,
+                "timestamp": timestamp,
+                "snippet": msg_data.get('snippet', ''),
+                "body": body,
+                "classification": classification,
+            })
+
+        return {"status": "success", "emails": emails}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching full emails: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/debug/db")
