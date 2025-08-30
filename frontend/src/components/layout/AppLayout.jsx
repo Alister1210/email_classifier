@@ -1,10 +1,9 @@
-import React, { useState } from "react";
+import React from "react";
 import { ThemeProvider } from "./ThemeProvider";
 import { Button } from "../ui/button";
-import { Moon, Sun, User } from "lucide-react";
+import { Moon, Sun, Home, BarChart3, LogOut } from "lucide-react";
 import { useTheme } from "next-themes";
-import { useNavigate } from "react-router-dom";
-import { AuthService } from "../../services/api";
+import { useNavigate, useLocation } from "react-router-dom";
 import { useGmailConnection } from "../../hooks/useGmailConnection";
 
 export function AppLayout({ children }) {
@@ -20,77 +19,77 @@ function Header() {
   const { theme, setTheme } = useTheme();
   const isDark = theme === "dark";
   const navigate = useNavigate();
+  const location = useLocation();
   const { isConnected, email, disconnect } = useGmailConnection();
-  const [dropdownOpen, setDropdownOpen] = useState(false);
+
+  const isActive = (path) => location.pathname === path;
+  const handleLogout = async () => {
+    try {
+      await AuthService.logout();
+    } catch (error) {
+      console.warn("Logout API call failed:", error);
+    }
+    disconnect();
+    navigate("/");
+  };
 
   return (
-    <header className="sticky top-0 z-30 w-full border-b border-[hsl(var(--border))] bg-[hsl(var(--background))]">
+    <header className="sticky top-0 z-30 w-full border-b border-gray-200 dark:border-gray-800 bg-white/80 dark:bg-gray-900/80 backdrop-blur-md">
       <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-4 py-3">
-        <div className="text-sm font-semibold">
-          JASH – Email Classification Dashboard
-        </div>
-        <div className="flex items-center gap-2 relative">
-          <Button variant="outline" onClick={() => navigate("/settings")}>
-            Settings
-          </Button>
+        {/* Logo */}
+        <button
+          onClick={() => navigate("/")}
+          className="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent hover:from-blue-700 hover:to-purple-700 transition-all"
+        >
+          JASH
+        </button>
+
+        {/* Navigation */}
+        <div className="flex items-center gap-2">
+          {/* Home Button */}
           <Button
-            variant="outline"
-            onClick={async () => {
-              if (isConnected) {
-                navigate("/classifications");
-              } else {
-                try {
-                  const data = await AuthService.login();
-                  window.location.href = data.authorization_url;
-                } catch (e) {
-                  console.error(e);
-                }
-              }
-            }}
+            variant={isActive("/") ? "default" : "ghost"}
+            onClick={() => navigate("/")}
+            className="flex items-center gap-2"
           >
-            {isConnected ? "View Classifications" : "Connect Gmail"}
+            <Home size={16} />
+            <span className="hidden sm:inline">Home</span>
           </Button>
 
-          {/* Profile dropdown */}
-          <div className="relative">
-            <button
-              aria-label="Profile"
-              title="Profile"
-              className="h-9 w-9 rounded-md border border-[hsl(var(--border))] flex items-center justify-center"
-              onClick={() => setDropdownOpen((prev) => !prev)}
-            >
-              <User size={16} />
-            </button>
-            {dropdownOpen && (
-              <div className="absolute right-0 mt-2 w-48 rounded-md border bg-white shadow-lg p-2 text-sm">
-                {isConnected ? (
-                  <>
-                    <div className="px-2 py-1 text-gray-600">
-                      {email || "Fetching email..."}
-                    </div>
-                    <Button
-                      variant="ghost"
-                      className="w-full justify-start"
-                      onClick={() => {
-                        disconnect();
-                        navigate("/");
-                        setDropdownOpen(false);
-                      }}
-                    >
-                      Sign out
-                    </Button>
-                  </>
-                ) : (
-                  <div className="px-2 py-1 text-gray-500">Not connected</div>
-                )}
-              </div>
-            )}
-          </div>
+          {/* Classifications Button */}
+          <Button
+            variant={isActive("/classifications") ? "default" : "ghost"}
+            onClick={() => navigate("/classifications")}
+            disabled={!isConnected}
+            className="flex items-center gap-2"
+          >
+            <BarChart3 size={16} />
+            <span className="hidden sm:inline">Classifications</span>
+          </Button>
 
-          {/* Theme toggle */}
+          {/* Connection Status & Logout */}
+          {isConnected && (
+            <div className="flex items-center gap-2">
+              {email && (
+                <div className="hidden md:flex items-center gap-2 px-3 py-1 bg-emerald-50 dark:bg-emerald-900/20 rounded-full text-emerald-700 dark:text-emerald-300 text-sm">
+                  <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
+                  Connected: {email.split("@")[0]}
+                </div>
+              )}
+              <Button
+                variant="outline"
+                onClick={handleLogout}
+                className="flex items-center gap-2 text-sm"
+              >
+                <LogOut size={14} />
+                <span className="hidden sm:inline">Logout</span>
+              </Button>
+            </div>
+          )}
+
+          {/* Theme Toggle */}
           <Button
             variant="ghost"
-            aria-label="Toggle theme"
             onClick={() => setTheme(isDark ? "light" : "dark")}
             className="h-9 w-9 p-0"
             title="Toggle theme"

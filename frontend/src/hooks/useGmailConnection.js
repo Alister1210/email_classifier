@@ -6,30 +6,41 @@ export function useGmailConnection() {
   );
   const [email, setEmail] = useState(localStorage.getItem("gmailEmail") || "");
 
+  // Listen for localStorage changes (useful for multiple tabs)
   useEffect(() => {
-    const handler = () => {
+    const handleStorageChange = () => {
       setIsConnected(localStorage.getItem("gmailConnected") === "true");
       setEmail(localStorage.getItem("gmailEmail") || "");
     };
-    window.addEventListener("storage", handler);
-    return () => window.removeEventListener("storage", handler);
+
+    window.addEventListener("storage", handleStorageChange);
+    return () => window.removeEventListener("storage", handleStorageChange);
   }, []);
 
-  const connect = useCallback((email) => {
+  const connect = useCallback((userEmail) => {
+    console.log("Connecting Gmail for:", userEmail);
     setIsConnected(true);
-    setEmail(email);
+    setEmail(userEmail);
     localStorage.setItem("gmailConnected", "true");
-    localStorage.setItem("gmailEmail", email);
+    localStorage.setItem("gmailEmail", userEmail);
   }, []);
 
   const disconnect = useCallback(() => {
+    console.log("Disconnecting Gmail");
     setIsConnected(false);
     setEmail("");
     localStorage.removeItem("gmailConnected");
     localStorage.removeItem("gmailEmail");
+    localStorage.removeItem("access_token");
+    localStorage.removeItem("refresh_token");
   }, []);
 
-  return { isConnected, email, connect, disconnect };
+  return {
+    isConnected,
+    email,
+    connect,
+    disconnect,
+  };
 }
 
 export default useGmailConnection;
